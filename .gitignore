@@ -1,0 +1,5 @@
+/target
+/dist
+*.deb
+*.tar.gz
+.DS_Store
