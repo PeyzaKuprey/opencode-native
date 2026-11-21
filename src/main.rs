@@ -2,6 +2,7 @@ mod agent;
 mod config;
 mod llm;
 mod tools;
+mod tui;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -26,8 +27,10 @@ enum Commands {
         /// Prompt to execute
         prompt: Vec<String>,
     },
-    /// Interactive chat
+    /// Interactive chat (REPL)
     Chat,
+    /// Interactive TUI
+    Tui,
     /// Print resolved config path and defaults
     Config,
 }
@@ -68,6 +71,9 @@ async fn main() -> Result<()> {
                 let answer = agent::chat_turn(&cfg, &mut history, input).await?;
                 println!("\n{answer}\n");
             }
+        }
+        Commands::Tui => {
+            tui::run(cfg).await?;
         }
         Commands::Config => {
             println!("config_path={}", cfg_path.display());

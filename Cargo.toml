@@ -1,6 +1,6 @@
 [package]
 name = "opencode-native"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Lightweight native OpenCode-compatible agent for direct device use"
 license = "MIT"
@@ -9,8 +9,10 @@ repository = "https://github.com/PeyzaKuprey/opencode-native"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
+crossterm = "0.28"
 directories = "6"
 glob = "0.3"
+ratatui = "0.29"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }

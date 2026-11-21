@@ -37,7 +37,7 @@ Binary: `target/release/opencode-native`
 
 ```bash
 ./scripts/build-termux-deb.sh
-pkg install ./dist/opencode-native_0.1.0_aarch64.deb
+pkg install ./dist/opencode-native_0.1.1_aarch64.deb
 ```
 
 For official `pkg install opencode-native` availability, the package must be submitted/accepted into Termux repositories.
