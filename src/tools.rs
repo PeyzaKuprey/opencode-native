@@ -9,6 +9,22 @@ use walkdir::WalkDir;
 
 use crate::llm::ToolSpec;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Risk {
+    Safe,
+    Write,
+    Exec,
+}
+
+pub fn risk_for(name: &str) -> Risk {
+    match name {
+        "read" | "glob" | "grep" => Risk::Safe,
+        "write" | "edit" => Risk::Write,
+        "shell" => Risk::Exec,
+        _ => Risk::Exec,
+    }
+}
+
 pub fn specs() -> Vec<ToolSpec> {
     vec![
         spec("shell", "Run a shell command in the current working directory", json!({

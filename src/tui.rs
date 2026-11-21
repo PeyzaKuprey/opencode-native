@@ -56,15 +56,24 @@ struct App {
     show_help: bool,
     show_model: bool,
     model_input: String,
+    show_input_dialog: bool,
+    input_dialog_title: String,
+    input_dialog_value: String,
+    input_dialog_action: String,
     prompt_history: Vec<String>,
     prompt_history_idx: Option<usize>,
     last_error: Option<String>,
+    pending_perm: Option<PendingPerm>,
+    control_tx: Option<mpsc::Sender<agent::AgentControl>>,
 }
 
 enum UiEvent {
     Agent(AgentEvent),
     Done(Vec<ChatMessage>),
 }
+
+#[derive(Clone)]
+struct PendingPerm { id: String, name: String, args: String }
 
 #[derive(Clone)]
 struct Cmd {
@@ -76,11 +85,15 @@ struct Cmd {
 fn commands() -> Vec<Cmd> {
     vec![
         Cmd { id: "session.new", title: "New session", key: "Ctrl+N" },
-        Cmd { id: "session.list", title: "Switch/list sessions", key: "Ctrl+L" },
+        Cmd { id: "session.list", title: "Sessions...", key: "Ctrl+L" },
+        Cmd { id: "session.clear", title: "Clear session messages", key: "" },
+        Cmd { id: "session.rename", title: "Rename session", key: "" },
         Cmd { id: "model.set", title: "Set model", key: "" },
-        Cmd { id: "model.info", title: "Show model/config", key: "" },
-        Cmd { id: "session.clear", title: "Clear current messages", key: "" },
-        Cmd { id: "help.show", title: "Show help", key: "Ctrl+G / ?" },
+        Cmd { id: "model.info", title: "Model/config info", key: "" },
+        Cmd { id: "provider.key", title: "Set API key", key: "" },
+        Cmd { id: "provider.base_url", title: "Set base URL", key: "" },
+        Cmd { id: "config.save", title: "Save config", key: "" },
+        Cmd { id: "help.show", title: "Help", key: "Ctrl+G" },
         Cmd { id: "app.quit", title: "Quit", key: "Ctrl+C" },
     ]
 }
@@ -187,9 +200,15 @@ async fn app_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cfg: Co
         show_help: false,
         show_model: false,
         model_input: String::new(),
+        show_input_dialog: false,
+        input_dialog_title: String::new(),
+        input_dialog_value: String::new(),
+        input_dialog_action: String::new(),
         prompt_history: Vec::new(),
         prompt_history_idx: None,
         last_error: None,
+        pending_perm: None,
+        control_tx: None,
     };
     let (tx, rx) = mpsc::channel::<UiEvent>();
 
@@ -237,9 +256,15 @@ async fn app_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cfg: Co
                     app.last_error = Some(e.clone());
                     push_msg(&mut app, "error", e);
                 }
+                UiEvent::Agent(AgentEvent::PermissionRequest { id, name, args }) => {
+                    app.pending_perm = Some(PendingPerm { id, name, args });
+                    app.status = "permission required".into();
+                }
                 UiEvent::Done(hist) => {
                     app.busy = false;
                     app.status = "idle".into();
+                    app.control_tx = None;
+                    app.pending_perm = None;
                     app.sessions[app.current].history = hist;
                     if app.sessions[app.current].title == "New session" {
                         if let Some(m) = app.sessions[app.current].messages.iter().find(|m| m.role == "user") {
@@ -258,6 +283,43 @@ async fn app_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cfg: Co
         }
         let Event::Key(key) = event::read()? else { continue; };
         if key.kind != KeyEventKind::Press {
+            continue;
+        }
+
+        if let Some(p) = app.pending_perm.clone() {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some(tx) = &app.control_tx { let _ = tx.send(agent::AgentControl::Permission { id: p.id.clone(), allow: true }); }
+                    push_msg(&mut app, "sys", format!("Allowed: {}", p.name));
+                    app.pending_perm = None;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    if let Some(tx) = &app.control_tx { let _ = tx.send(agent::AgentControl::Permission { id: p.id.clone(), allow: false }); }
+                    push_msg(&mut app, "sys", format!("Denied: {}", p.name));
+                    app.pending_perm = None;
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        if app.show_input_dialog {
+            match key.code {
+                KeyCode::Esc => app.show_input_dialog = false,
+                KeyCode::Enter => {
+                    let val = app.input_dialog_value.trim().to_string();
+                    let action = app.input_dialog_action.clone();
+                    app.show_input_dialog = false;
+                    apply_input_dialog(&mut app, &action, &val);
+                }
+                KeyCode::Backspace => { app.input_dialog_value.pop(); }
+                KeyCode::Char(c) => {
+                    if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) {
+                        app.input_dialog_value.push(c);
+                    }
+                }
+                _ => {}
+            }
             continue;
         }
 
@@ -428,7 +490,37 @@ fn handle_slash(app: &mut App, text: &str, tx: &mpsc::Sender<UiEvent>) -> bool {
             else { app.cfg.model.model = arg.to_string(); push_msg(app, "sys", format!("Model set to: {arg}")); }
             true
         }
+        "/rename" => {
+            if arg.is_empty() { run_command(app, "session.rename", tx); }
+            else { app.sessions[app.current].title = arg.to_string(); save_sessions(&app.sessions); }
+            true
+        }
+        "/key" => { if arg.is_empty() { run_command(app, "provider.key", tx); } else { app.cfg.model.api_key = Some(arg.to_string()); push_msg(app, "sys", "API key set (in memory)."); } true }
+        "/baseurl" => { if arg.is_empty() { run_command(app, "provider.base_url", tx); } else { app.cfg.model.base_url = arg.to_string(); push_msg(app, "sys", format!("Base URL set to {arg}")); } true }
+        "/save" => { run_command(app, "config.save", tx); true }
         _ => false,
+    }
+}
+
+fn open_input_dialog(app: &mut App, title: &str, action: &str, initial: &str) {
+    app.show_input_dialog = true;
+    app.input_dialog_title = title.to_string();
+    app.input_dialog_action = action.to_string();
+    app.input_dialog_value = initial.to_string();
+}
+
+fn apply_input_dialog(app: &mut App, action: &str, val: &str) {
+    match action {
+        "session.rename" => {
+            if !val.is_empty() { app.sessions[app.current].title = val.to_string(); save_sessions(&app.sessions); }
+        }
+        "provider.key" => {
+            if !val.is_empty() { app.cfg.model.api_key = Some(val.to_string()); push_msg(app, "sys", "API key set (in memory). Use Save config to persist."); }
+        }
+        "provider.base_url" => {
+            if !val.is_empty() { app.cfg.model.base_url = val.to_string(); push_msg(app, "sys", format!("Base URL set to {}", app.cfg.model.base_url)); }
+        }
+        _ => {}
     }
 }
 
@@ -441,6 +533,10 @@ fn run_command(app: &mut App, id: &str, _tx: &mpsc::Sender<UiEvent>) {
             save_sessions(&app.sessions);
         }
         "session.list" => { app.show_sessions = true; app.session_sel = app.current; }
+        "session.rename" => {
+            let cur = app.sessions[app.current].title.clone();
+            open_input_dialog(app, "Rename session", "session.rename", &cur);
+        }
         "model.info" => {
             push_msg(app, "sys", format!(
                 "provider={}\nmodel={}\nbase_url={}\napi_key_env={}\nconfig_key={}",
@@ -451,6 +547,15 @@ fn run_command(app: &mut App, id: &str, _tx: &mpsc::Sender<UiEvent>) {
         "model.set" => {
             app.model_input = app.cfg.model.model.clone();
             app.show_model = true;
+        }
+        "provider.key" => open_input_dialog(app, "Set API key", "provider.key", ""),
+        "provider.base_url" => { let cur = app.cfg.model.base_url.clone(); open_input_dialog(app, "Set base URL", "provider.base_url", &cur); }
+        "config.save" => {
+            let path = crate::config::default_config_path();
+            match app.cfg.save(&path) {
+                Ok(()) => push_msg(app, "sys", format!("Config saved to {}", path.display())),
+                Err(e) => push_msg(app, "error", format!("Config save failed: {e:#}")),
+            }
         }
         "session.clear" => { app.sessions[app.current].messages.clear(); app.sessions[app.current].history.clear(); save_sessions(&app.sessions); }
         "help.show" => { app.show_help = true; }
@@ -466,6 +571,8 @@ fn submit_prompt(app: &mut App, text: String, tx: &mpsc::Sender<UiEvent>) {
     let cfg2 = app.cfg.clone();
     let mut hist2 = app.sessions[app.current].history.clone();
     let tx2 = tx.clone();
+    let (ctx, crx) = mpsc::channel::<agent::AgentControl>();
+    app.control_tx = Some(ctx);
     tokio::spawn(async move {
         let atx = tx2.clone();
         let (etx, erx) = mpsc::channel::<AgentEvent>();
@@ -475,7 +582,7 @@ fn submit_prompt(app: &mut App, text: String, tx: &mpsc::Sender<UiEvent>) {
                 let _ = atx2.send(UiEvent::Agent(ev));
             }
         });
-        let res = agent::chat_turn(&cfg2, &mut hist2, &text, Some(etx)).await;
+        let res = agent::chat_turn(&cfg2, &mut hist2, &text, Some(etx), Some(crx)).await;
         if let Err(e) = res {
             let _ = atx.send(UiEvent::Agent(AgentEvent::Error(format!("{e:#}"))));
         }
@@ -613,6 +720,22 @@ Notes:
         f.render_widget(Clear, area);
         f.render_widget(Paragraph::new(app.model_input.as_str())
             .block(Block::default().borders(Borders::ALL).title(" Set model (Enter apply, Esc cancel) ")), area);
+    }
+
+    if app.show_input_dialog {
+        let area = centered_rect(70, 20, f.area());
+        f.render_widget(Clear, area);
+        let title = format!(" {} (Enter apply, Esc cancel) ", app.input_dialog_title);
+        f.render_widget(Paragraph::new(app.input_dialog_value.as_str())
+            .block(Block::default().borders(Borders::ALL).title(title)), area);
+    }
+
+    if let Some(p) = &app.pending_perm {
+        let area = centered_rect(70, 30, f.area());
+        f.render_widget(Clear, area);
+        let t = format!("Tool permission requested\n\nTool: {}\nArgs: {}\n\nY = allow, N/Esc = deny", p.name, p.args.chars().take(500).collect::<String>());
+        f.render_widget(Paragraph::new(t).wrap(Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).title(" Permission ")), area);
     }
 }
 

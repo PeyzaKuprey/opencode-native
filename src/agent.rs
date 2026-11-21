@@ -14,11 +14,17 @@ pub enum AgentEvent {
     AssistantDelta(String),
     Assistant(String),
     Error(String),
+    PermissionRequest { id: String, name: String, args: String },
+}
+
+#[derive(Debug, Clone)]
+pub enum AgentControl {
+    Permission { id: String, allow: bool },
 }
 
 pub async fn run_once(cfg: &Config, prompt: &str) -> Result<String> {
     let mut history = Vec::new();
-    chat_turn(cfg, &mut history, prompt, None).await
+    chat_turn(cfg, &mut history, prompt, None, None).await
 }
 
 pub async fn chat_turn(
@@ -26,6 +32,7 @@ pub async fn chat_turn(
     history: &mut Vec<ChatMessage>,
     user_input: &str,
     events: Option<Sender<AgentEvent>>,
+    control: Option<mpsc::Receiver<AgentControl>>,
 ) -> Result<String> {
     let send = |ev: AgentEvent| {
         if let Some(tx) = &events {
@@ -73,10 +80,7 @@ pub async fn chat_turn(
             });
             match client.chat_stream(&messages, &tool_specs, &dtx).await {
                 Ok(m) => m,
-                Err(e) => {
-                    send(AgentEvent::Status("stream failed, retrying non-stream".into()));
-                    client.chat(&messages, &tool_specs).await.map_err(|e2| anyhow::anyhow!("{e:#}; fallback: {e2:#}"))?
-                }
+                Err(_e) => client.chat(&messages, &tool_specs).await?,
             }
         } else {
             client.chat(&messages, &tool_specs).await?
@@ -86,12 +90,33 @@ pub async fn chat_turn(
             messages.push(msg.clone());
             for tc in tool_calls {
                 let args_str = tc.function.arguments.clone();
+                let risk = tools::risk_for(&tc.function.name);
+                let mut allowed = matches!(risk, tools::Risk::Safe);
+                if !allowed {
+                    if let (Some(tx), Some(rx)) = (&events, &control) {
+                        let _ = tx.send(AgentEvent::PermissionRequest { id: tc.id.clone(), name: tc.function.name.clone(), args: args_str.clone() });
+                        send(AgentEvent::Status(format!("awaiting permission: {}", tc.function.name)));
+                        while let Ok(ctrl) = rx.recv() {
+                            match ctrl {
+                                AgentControl::Permission { id, allow } if id == tc.id => { allowed = allow; break; }
+                                _ => {}
+                            }
+                        }
+                    } else {
+                        // non-interactive mode: allow by default for now
+                        allowed = true;
+                    }
+                }
                 send(AgentEvent::ToolCall { name: tc.function.name.clone(), args: args_str.clone() });
-                let args: Value = serde_json::from_str(&args_str)
-                    .unwrap_or_else(|_| Value::Object(Default::default()));
-                let result = match tools::execute(&tc.function.name, &args) {
-                    Ok(out) => out,
-                    Err(e) => format!("tool error: {e:#}"),
+                let result = if !allowed {
+                    "tool denied by user".to_string()
+                } else {
+                    let args: Value = serde_json::from_str(&args_str)
+                        .unwrap_or_else(|_| Value::Object(Default::default()));
+                    match tools::execute(&tc.function.name, &args) {
+                        Ok(out) => out,
+                        Err(e) => format!("tool error: {e:#}"),
+                    }
                 };
                 send(AgentEvent::ToolResult { name: tc.function.name.clone(), output: result.clone() });
                 messages.push(ChatMessage {

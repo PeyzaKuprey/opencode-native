@@ -44,17 +44,30 @@ impl Default for Config {
     }
 }
 
-pub fn resolve_config_path(cli: Option<&Path>) -> Result<PathBuf> {
-    if let Some(p) = cli {
-        return Ok(p.to_path_buf());
+impl Config {
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() { fs::create_dir_all(parent).with_context(|| format!("create config dir {}", parent.display()))?; }
+        let text = toml::to_string_pretty(self).context("serialize config")?;
+        fs::write(path, text).with_context(|| format!("write config {}", path.display()))?;
+        Ok(())
+    }
+}
+
+pub fn default_config_path() -> PathBuf {
+    if let Ok(envp) = std::env::var("OPENCODE_NATIVE_CONFIG") {
+        if !envp.trim().is_empty() { return PathBuf::from(envp); }
     }
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg.trim().is_empty() {
-            return Ok(PathBuf::from(xdg).join("opencode-native/config.toml"));
-        }
+        if !xdg.trim().is_empty() { return PathBuf::from(xdg).join("opencode-native/config.toml"); }
     }
-    let base = BaseDirs::new().context("cannot resolve home directory")?;
-    Ok(base.config_dir().join("opencode-native/config.toml"))
+    BaseDirs::new()
+        .map(|b| b.config_dir().join("opencode-native/config.toml"))
+        .unwrap_or_else(|| PathBuf::from(".opencode-native/config.toml"))
+}
+
+pub fn resolve_config_path(cli: Option<&Path>) -> Result<PathBuf> {
+    if let Some(p) = cli { return Ok(p.to_path_buf()); }
+    Ok(default_config_path())
 }
 
 pub fn load_or_default(path: &Path) -> Result<Config> {
