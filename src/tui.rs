@@ -652,13 +652,16 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
         f.set_cursor_position((x, y));
     }
 
+    let perm = match app.cfg.agent.permission_mode.as_str() { "allow" => "allow", "deny" => "deny", _ => "ask" };
     let footer = Line::from(vec![
         Span::styled(format!(" {} ", app.status), Style::default().fg(Color::Yellow)),
-        Span::raw("| "),
-        Span::styled(app.cfg.model.model.clone(), Style::default().fg(Color::DarkGray)),
-        Span::raw(" | "),
+        Span::raw("│ "),
+        Span::styled(app.cfg.model.model.clone(), Style::default().fg(Color::Cyan)),
+        Span::raw(" │ "),
         Span::styled(app.cfg.model.provider.clone(), Style::default().fg(Color::DarkGray)),
-        Span::raw(" | Ctrl+P palette  Ctrl+N new  Ctrl+L sessions  Ctrl+G help  Ctrl+C quit"),
+        Span::raw(" │ "),
+        Span::styled(format!("perm:{perm}"), Style::default().fg(Color::DarkGray)),
+        Span::raw(" │ Ctrl+P commands  Ctrl+N new  Ctrl+L sessions  /help"),
     ]);
     f.render_widget(Paragraph::new(footer), root[3]);
 
@@ -666,7 +669,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
         let area = centered_rect(72, 72, f.area());
         f.render_widget(Clear, area);
         let t = "\
-opencode-native TUI (OpenCode-style lightweight port)
+opencode-native (native Termux/OpenCode-style client)
 
 Keys:
   Enter         Send prompt
@@ -677,15 +680,22 @@ Keys:
   Ctrl+C        Quit
   Esc           Close overlay / quit when idle
   PgUp/PgDn     Scroll messages
-  Up/Down       Prompt history (when input empty/history browsing)
+  Up/Down       Prompt history
 
 Slash commands:
-  /new /sessions /model [name] /help /clear /quit
+  /new /sessions /model [name] /rename [title]
+  /key [api_key] /baseurl [url] /save /help /clear /quit
 
-Notes:
-  - Native Rust TUI, no Bun/proot runtime.
-  - Uses OpenAI-compatible API config from config.toml.
-  - Not full OpenCode server parity yet; actively being ported.";
+Permissions:
+  Tool calls request permission (Y/N) unless mode is allow/deny.
+  Change via command palette: Permission mode.
+
+Config:
+  ~/.config/opencode-native/config.toml (or OPENCODE_NATIVE_CONFIG)
+
+Status:
+  Native Rust TUI, streaming, tools, sessions, permission prompts.
+  Full OpenCode server/protocol parity is still in progress.";
         f.render_widget(Paragraph::new(t).wrap(Wrap { trim: false }).block(Block::default().borders(Borders::ALL).title(" Help ")), area);
     }
 
