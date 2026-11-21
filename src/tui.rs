@@ -208,8 +208,30 @@ async fn app_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cfg: Co
                     if more > 0 { text.push_str(&format!("\n... ({more} more lines)")); }
                     push_msg(&mut app, "tool", text);
                 }
+                UiEvent::Agent(AgentEvent::AssistantDelta(t)) => {
+                    if let Some(last) = app.sessions[app.current].messages.last_mut() {
+                        if last.role == "assistant_stream" {
+                            last.text.push_str(&t);
+                        } else {
+                            app.sessions[app.current].messages.push(Msg { role: "assistant_stream".into(), text: t });
+                        }
+                    } else {
+                        app.sessions[app.current].messages.push(Msg { role: "assistant_stream".into(), text: t });
+                    }
+                    app.auto_scroll = true; app.scroll = 0;
+                }
                 UiEvent::Agent(AgentEvent::Assistant(t)) => {
-                    push_msg(&mut app, "assistant", t);
+                    if let Some(last) = app.sessions[app.current].messages.last_mut() {
+                        if last.role == "assistant_stream" {
+                            last.role = "assistant".into();
+                            last.text = t.clone();
+                        } else {
+                            app.sessions[app.current].messages.push(Msg { role: "assistant".into(), text: t });
+                        }
+                    } else {
+                        app.sessions[app.current].messages.push(Msg { role: "assistant".into(), text: t });
+                    }
+                    app.auto_scroll = true; app.scroll = 0;
                 }
                 UiEvent::Agent(AgentEvent::Error(e)) => {
                     app.last_error = Some(e.clone());
@@ -489,7 +511,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     for m in &session.messages {
         let (label, color) = match m.role.as_str() {
             "user" => ("You", Color::Cyan),
-            "assistant" => ("Assistant", Color::Green),
+            "assistant" | "assistant_stream" => ("Assistant", Color::Green),
             "tool" => ("Tool", Color::Magenta),
             "error" => ("Error", Color::Red),
             _ => ("System", Color::Yellow),

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 
 use crate::config::{resolve_api_key, Config};
 use crate::llm::{ChatMessage, LlmClient};
@@ -11,6 +11,7 @@ pub enum AgentEvent {
     Status(String),
     ToolCall { name: String, args: String },
     ToolResult { name: String, output: String },
+    AssistantDelta(String),
     Assistant(String),
     Error(String),
 }
@@ -62,7 +63,24 @@ pub async fn chat_turn(
         }
 
         send(AgentEvent::Status(format!("thinking ({steps})")));
-        let msg = client.chat(&messages, &tool_specs).await?;
+        let msg = if let Some(tx) = &events {
+            let (dtx, drx) = mpsc::channel::<String>();
+            let tx2 = tx.clone();
+            std::thread::spawn(move || {
+                while let Ok(delta) = drx.recv() {
+                    let _ = tx2.send(AgentEvent::AssistantDelta(delta));
+                }
+            });
+            match client.chat_stream(&messages, &tool_specs, &dtx).await {
+                Ok(m) => m,
+                Err(e) => {
+                    send(AgentEvent::Status("stream failed, retrying non-stream".into()));
+                    client.chat(&messages, &tool_specs).await.map_err(|e2| anyhow::anyhow!("{e:#}; fallback: {e2:#}"))?
+                }
+            }
+        } else {
+            client.chat(&messages, &tool_specs).await?
+        };
         let tool_calls = msg.tool_calls.clone().unwrap_or_default();
         if !tool_calls.is_empty() {
             messages.push(msg.clone());
