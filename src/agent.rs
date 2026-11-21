@@ -93,18 +93,23 @@ pub async fn chat_turn(
                 let risk = tools::risk_for(&tc.function.name);
                 let mut allowed = matches!(risk, tools::Risk::Safe);
                 if !allowed {
-                    if let (Some(tx), Some(rx)) = (&events, &control) {
-                        let _ = tx.send(AgentEvent::PermissionRequest { id: tc.id.clone(), name: tc.function.name.clone(), args: args_str.clone() });
-                        send(AgentEvent::Status(format!("awaiting permission: {}", tc.function.name)));
-                        while let Ok(ctrl) = rx.recv() {
-                            match ctrl {
-                                AgentControl::Permission { id, allow } if id == tc.id => { allowed = allow; break; }
-                                _ => {}
+                    match cfg.agent.permission_mode.as_str() {
+                        "allow" => allowed = true,
+                        "deny" => allowed = false,
+                        _ => {
+                            if let (Some(tx), Some(rx)) = (&events, &control) {
+                                let _ = tx.send(AgentEvent::PermissionRequest { id: tc.id.clone(), name: tc.function.name.clone(), args: args_str.clone() });
+                                send(AgentEvent::Status(format!("awaiting permission: {}", tc.function.name)));
+                                while let Ok(ctrl) = rx.recv() {
+                                    match ctrl {
+                                        AgentControl::Permission { id, allow } if id == tc.id => { allowed = allow; break; }
+                                        _ => {}
+                                    }
+                                }
+                            } else {
+                                allowed = true;
                             }
                         }
-                    } else {
-                        // non-interactive mode: allow by default for now
-                        allowed = true;
                     }
                 }
                 send(AgentEvent::ToolCall { name: tc.function.name.clone(), args: args_str.clone() });

@@ -93,6 +93,9 @@ fn commands() -> Vec<Cmd> {
         Cmd { id: "provider.key", title: "Set API key", key: "" },
         Cmd { id: "provider.base_url", title: "Set base URL", key: "" },
         Cmd { id: "config.save", title: "Save config", key: "" },
+        Cmd { id: "permission.ask", title: "Permission mode: ask", key: "" },
+        Cmd { id: "permission.allow", title: "Permission mode: allow", key: "" },
+        Cmd { id: "permission.deny", title: "Permission mode: deny", key: "" },
         Cmd { id: "help.show", title: "Help", key: "Ctrl+G" },
         Cmd { id: "app.quit", title: "Quit", key: "Ctrl+C" },
     ]
@@ -557,6 +560,9 @@ fn run_command(app: &mut App, id: &str, _tx: &mpsc::Sender<UiEvent>) {
                 Err(e) => push_msg(app, "error", format!("Config save failed: {e:#}")),
             }
         }
+        "permission.ask" => { app.cfg.agent.permission_mode = "ask".into(); push_msg(app, "sys", "Permission mode: ask"); }
+        "permission.allow" => { app.cfg.agent.permission_mode = "allow".into(); push_msg(app, "sys", "Permission mode: allow (dangerous)"); }
+        "permission.deny" => { app.cfg.agent.permission_mode = "deny".into(); push_msg(app, "sys", "Permission mode: deny"); }
         "session.clear" => { app.sessions[app.current].messages.clear(); app.sessions[app.current].history.clear(); save_sessions(&app.sessions); }
         "help.show" => { app.show_help = true; }
         "app.quit" => { save_sessions(&app.sessions); std::process::exit(0); }

@@ -24,7 +24,11 @@ pub struct ModelConfig {
 pub struct AgentConfig {
     pub system_prompt: String,
     pub max_steps: usize,
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: String, // ask, allow, deny
 }
+
+fn default_permission_mode() -> String { "ask".to_string() }
 
 impl Default for Config {
     fn default() -> Self {
@@ -39,6 +43,7 @@ impl Default for Config {
             agent: AgentConfig {
                 system_prompt: "You are OpenCode Native, a lightweight coding agent running directly on the user's device. Be concise, safe, and helpful. Use tools when needed.".to_string(),
                 max_steps: 20,
+                permission_mode: "ask".to_string(),
             },
         }
     }
