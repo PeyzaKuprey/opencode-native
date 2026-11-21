@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::{self, Write};
 use std::path::PathBuf;
+use serde_json::Value;
 
 #[derive(Parser, Debug)]
 #[command(name = "opencode-native", version, about = "Lightweight native OpenCode-style agent")]
@@ -31,8 +32,30 @@ enum Commands {
     Chat,
     /// Interactive TUI
     Tui,
-    /// Print resolved config path and defaults
+    /// Show or initialize config
     Config,
+    /// List configured/default model info
+    Models,
+    /// Manage sessions (list/clear)
+    Session {
+        #[command(subcommand)]
+        action: Option<SessionAction>,
+    },
+    /// Serve HTTP API (compatibility placeholder)
+    Serve {
+        #[arg(long, default_value = "127.0.0.1:4096")]
+        host: String,
+        #[arg(long, default_value_t = 4096)]
+        port: u16,
+    },
+    /// Show version and runtime info
+    Version,
+}
+
+#[derive(Subcommand, Debug)]
+enum SessionAction {
+    List,
+    Path,
 }
 
 #[tokio::main]
@@ -79,7 +102,49 @@ async fn main() -> Result<()> {
             println!("config_path={}", cfg_path.display());
             println!("{}", toml::to_string_pretty(&cfg).context("serialize config")?);
         }
+        Commands::Models => {
+            println!("provider={}", cfg.model.provider);
+            println!("model={}", cfg.model.model);
+            println!("base_url={}", cfg.model.base_url);
+            println!("api_key_env={}", cfg.model.api_key_env);
+            println!("api_key_configured={}", cfg.model.api_key.as_ref().map(|k| !k.trim().is_empty()).unwrap_or(false));
+        }
+        Commands::Session { action } => {
+            let p = session_path();
+            match action.unwrap_or(SessionAction::List) {
+                SessionAction::Path => println!("{}", p.display()),
+                SessionAction::List => {
+                    let sessions = load_sessions_cli(&p);
+                    if sessions.is_empty() { println!("(no sessions)"); }
+                    for (i, s) in sessions.iter().enumerate() {
+                        println!("{:>2}. {}  [{} msgs]", i+1, s.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled"), s.get("messages").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0));
+                    }
+                }
+            }
+        }
+        Commands::Serve { host, port } => {
+            println!("opencode-native serve is a compatibility placeholder.");
+            println!("Native full OpenCode server parity is in progress.");
+            println!("Planned listen: http://{}:{}", host, port);
+            println!("Use `opencode-native tui` or `opencode-native chat` for the native client.");
+        }
+        Commands::Version => {
+            println!("opencode-native {}", env!("CARGO_PKG_VERSION"));
+            println!("os={}", std::env::consts::OS);
+            println!("arch={}", std::env::consts::ARCH);
+        }
     }
 
     Ok(())
+}
+
+fn session_path() -> PathBuf {
+    let base = std::env::var("XDG_DATA_HOME").ok().filter(|s| !s.is_empty()).map(PathBuf::from)
+        .or_else(|| directories::BaseDirs::new().map(|b| b.data_dir().to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("opencode-native/sessions.json")
+}
+
+fn load_sessions_cli(p: &PathBuf) -> Vec<Value> {
+    std::fs::read_to_string(p).ok().and_then(|s| serde_json::from_str::<Vec<Value>>(&s).ok()).unwrap_or_default()
 }
