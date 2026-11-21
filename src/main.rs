@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
                 if input == "/exit" || input == "/quit" {
                     break;
                 }
-                let answer = agent::chat_turn(&cfg, &mut history, input).await?;
+                let answer = agent::chat_turn(&cfg, &mut history, input, None).await?;
                 println!("\n{answer}\n");
             }
         }

@@ -1,16 +1,38 @@
 use anyhow::Result;
 use serde_json::Value;
+use std::sync::mpsc::Sender;
 
 use crate::config::{resolve_api_key, Config};
 use crate::llm::{ChatMessage, LlmClient};
 use crate::tools;
 
-pub async fn run_once(cfg: &Config, prompt: &str) -> Result<String> {
-    let mut history = Vec::new();
-    chat_turn(cfg, &mut history, prompt).await
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    Status(String),
+    ToolCall { name: String, args: String },
+    ToolResult { name: String, output: String },
+    Assistant(String),
+    Error(String),
 }
 
-pub async fn chat_turn(cfg: &Config, history: &mut Vec<ChatMessage>, user_input: &str) -> Result<String> {
+pub async fn run_once(cfg: &Config, prompt: &str) -> Result<String> {
+    let mut history = Vec::new();
+    chat_turn(cfg, &mut history, prompt, None).await
+}
+
+pub async fn chat_turn(
+    cfg: &Config,
+    history: &mut Vec<ChatMessage>,
+    user_input: &str,
+    events: Option<Sender<AgentEvent>>,
+) -> Result<String> {
+    let send = |ev: AgentEvent| {
+        if let Some(tx) = &events {
+            let _ = tx.send(ev);
+        }
+    };
+
+    send(AgentEvent::Status("connecting".into()));
     let api_key = resolve_api_key(cfg)?;
     let client = LlmClient::new(cfg.model.base_url.clone(), api_key, cfg.model.model.clone())?;
     let tool_specs = tools::specs();
@@ -39,17 +61,21 @@ pub async fn chat_turn(cfg: &Config, history: &mut Vec<ChatMessage>, user_input:
             anyhow::bail!("max_steps exceeded ({})", cfg.agent.max_steps);
         }
 
+        send(AgentEvent::Status(format!("thinking ({steps})")));
         let msg = client.chat(&messages, &tool_specs).await?;
         let tool_calls = msg.tool_calls.clone().unwrap_or_default();
         if !tool_calls.is_empty() {
             messages.push(msg.clone());
             for tc in tool_calls {
-                let args: Value = serde_json::from_str(&tc.function.arguments)
+                let args_str = tc.function.arguments.clone();
+                send(AgentEvent::ToolCall { name: tc.function.name.clone(), args: args_str.clone() });
+                let args: Value = serde_json::from_str(&args_str)
                     .unwrap_or_else(|_| Value::Object(Default::default()));
                 let result = match tools::execute(&tc.function.name, &args) {
                     Ok(out) => out,
                     Err(e) => format!("tool error: {e:#}"),
                 };
+                send(AgentEvent::ToolResult { name: tc.function.name.clone(), output: result.clone() });
                 messages.push(ChatMessage {
                     role: "tool".to_string(),
                     content: Some(result),
@@ -76,6 +102,7 @@ pub async fn chat_turn(cfg: &Config, history: &mut Vec<ChatMessage>, user_input:
             tool_call_id: None,
             name: None,
         });
+        send(AgentEvent::Assistant(final_text.clone()));
         return Ok(final_text);
     }
 }
