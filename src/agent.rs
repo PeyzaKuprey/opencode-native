@@ -1,0 +1,81 @@
+use anyhow::Result;
+use serde_json::Value;
+
+use crate::config::{resolve_api_key, Config};
+use crate::llm::{ChatMessage, LlmClient};
+use crate::tools;
+
+pub async fn run_once(cfg: &Config, prompt: &str) -> Result<String> {
+    let mut history = Vec::new();
+    chat_turn(cfg, &mut history, prompt).await
+}
+
+pub async fn chat_turn(cfg: &Config, history: &mut Vec<ChatMessage>, user_input: &str) -> Result<String> {
+    let api_key = resolve_api_key(cfg)?;
+    let client = LlmClient::new(cfg.model.base_url.clone(), api_key, cfg.model.model.clone())?;
+    let tool_specs = tools::specs();
+
+    let mut messages: Vec<ChatMessage> = Vec::new();
+    messages.push(ChatMessage {
+        role: "system".to_string(),
+        content: Some(cfg.agent.system_prompt.clone()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    });
+    messages.extend(history.clone());
+    messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: Some(user_input.to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    });
+
+    let mut steps = 0usize;
+    loop {
+        steps += 1;
+        if steps > cfg.agent.max_steps {
+            anyhow::bail!("max_steps exceeded ({})", cfg.agent.max_steps);
+        }
+
+        let msg = client.chat(&messages, &tool_specs).await?;
+        let tool_calls = msg.tool_calls.clone().unwrap_or_default();
+        if !tool_calls.is_empty() {
+            messages.push(msg.clone());
+            for tc in tool_calls {
+                let args: Value = serde_json::from_str(&tc.function.arguments)
+                    .unwrap_or_else(|_| Value::Object(Default::default()));
+                let result = match tools::execute(&tc.function.name, &args) {
+                    Ok(out) => out,
+                    Err(e) => format!("tool error: {e:#}"),
+                };
+                messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: Some(result),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id),
+                    name: Some(tc.function.name),
+                });
+            }
+            continue;
+        }
+
+        let final_text = msg.content.clone().unwrap_or_default();
+        history.push(ChatMessage {
+            role: "user".to_string(),
+            content: Some(user_input.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+        history.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: Some(final_text.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+        return Ok(final_text);
+    }
+}
