@@ -18,9 +18,9 @@ need_cmd() { command -v "$1" >/dev/null 2>&1 || err "missing required command: $
 download() {
   url="$1"; out="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fL --retry 3 -o "$out" "$url"
+    curl -fL --connect-timeout 15 --max-time 300 --retry 3 --retry-delay 2 -o "$out" "$url"
   elif command -v wget >/dev/null 2>&1; then
-    wget -O "$out" "$url"
+    wget --timeout=30 --tries=3 -O "$out" "$url"
   else
     err "need curl or wget"
   fi
